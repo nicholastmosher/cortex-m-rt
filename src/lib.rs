@@ -118,7 +118,8 @@
 //!     hprintln!("Hello, world!");
 //! }
 //!
-//! // As we are not using interrupts, we just register a dummy catch all handler
+//! // As we are not using interrupts, we just register a dummy catch all
+//! // handler
 //! #[allow(dead_code)]
 //! #[link_section = ".rodata.interrupts"]
 //! #[used]
@@ -145,16 +146,17 @@
 //!  8000404:       b084            sub     sp, #16
 //! ```
 
+#![cfg_attr(target_arch = "arm", feature(core_intrinsics))]
 #![deny(missing_docs)]
 #![deny(warnings)]
 #![feature(asm)]
 #![feature(compiler_builtins_lib)]
 #![feature(lang_items)]
 #![feature(linkage)]
+#![feature(naked_functions)]
 #![feature(used)]
 #![no_std]
 
-#[cfg(any(feature = "panic-over-itm", feature = "exceptions"))]
 #[cfg_attr(feature = "panic-over-itm", macro_use)]
 extern crate cortex_m;
 extern crate compiler_builtins;
@@ -165,9 +167,10 @@ extern crate r0;
 
 mod lang_items;
 
-#[cfg(feature = "exceptions")]
-use cortex_m::exception;
+#[cfg(target_arch = "arm")]
+use cortex_m::exception::StackedRegisters;
 
+#[cfg(target_arch = "arm")]
 extern "C" {
     // NOTE `rustc` forces this signature on us. See `src/lang_items.rs`
     fn main(argc: isize, argv: *const *const u8) -> isize;
@@ -184,9 +187,15 @@ extern "C" {
     static _sidata: u32;
 }
 
+#[cfg(target_arch = "arm")]
+#[used]
+#[link_section = ".vector_table.reset_handler"]
+static RESET_HANDLER: unsafe extern "C" fn() -> ! = reset_handler;
+
 /// The reset handler
 ///
 /// This is the entry point of all programs
+#[cfg(target_arch = "arm")]
 #[link_section = ".reset_handler"]
 unsafe extern "C" fn reset_handler() -> ! {
     ::r0::zero_bss(&mut _sbss, &mut _ebss);
@@ -199,20 +208,68 @@ unsafe extern "C" fn reset_handler() -> ! {
     // If `main` returns, then we go into "reactive" mode and simply attend
     // interrupts as they occur.
     loop {
-        #[cfg(target_arch = "arm")]
         asm!("wfi" :::: "volatile");
     }
 }
 
-#[allow(dead_code)]
-#[used]
-#[link_section = ".vector_table.reset_handler"]
-static RESET_HANDLER: unsafe extern "C" fn() -> ! = reset_handler;
+extern "C" {
+    fn BUS_FAULT();
+    fn HARD_FAULT();
+    fn MEM_MANAGE();
+    fn NMI();
+    fn PENDSV();
+    fn SVCALL();
+    fn SYS_TICK();
+    fn USAGE_FAULT();
+}
 
-#[allow(dead_code)]
-#[cfg(feature = "exceptions")]
-#[link_section = ".rodata.exceptions"]
 #[used]
-static EXCEPTIONS: exception::Handlers = exception::Handlers {
-    ..exception::DEFAULT_HANDLERS
-};
+#[link_section = ".vector_table.exceptions"]
+static EXCEPTIONS: [Option<unsafe extern "C" fn()>; 14] = [
+    Some(NMI),
+    Some(HARD_FAULT),
+    Some(MEM_MANAGE),
+    Some(BUS_FAULT),
+    Some(USAGE_FAULT),
+    None,
+    None,
+    None,
+    None,
+    Some(SVCALL),
+    None,
+    None,
+    Some(PENDSV),
+    Some(SYS_TICK),
+];
+
+// This is the actual exception handler. `_sr` is a pointer to the previous
+// stack frame
+#[cfg(target_arch = "arm")]
+extern "C" fn default_handler(_sr: &StackedRegisters) -> ! {
+    use cortex_m::exception::Vector;
+
+    // What exception is currently being serviced
+    let _v = Vector::active();
+
+    cortex_m::asm::bkpt();
+
+    loop {}
+}
+
+#[cfg(target_arch = "arm")]
+#[doc(hidden)]
+#[export_name = "DEFAULT_HANDLER"]
+#[linkage = "weak"]
+#[naked]
+pub unsafe extern "C" fn _default_handler() -> ! {
+    // "trampoline" to get to the real exception handler.
+    asm!("mrs r0, MSP
+            ldr r1, [r0, #20]
+            b $0"
+            :
+            : "i"(default_handler as extern "C" fn(&StackedRegisters) -> !)
+            :
+            : "volatile");
+
+    ::core::intrinsics::unreachable()
+}

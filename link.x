@@ -10,10 +10,10 @@ SECTIONS
 
     KEEP(*(.vector_table.reset_handler));
 
-    KEEP(*(.rodata.exceptions));
+    KEEP(*(.vector_table.exceptions));
     _eexceptions = .;
 
-    KEEP(*(.rodata.interrupts));
+    KEEP(*(.vector_table.interrupts));
     _einterrupts = .;
   } > FLASH
 
@@ -93,28 +93,39 @@ SECTIONS
   }
 }
 
+PROVIDE(BUS_FAULT = DEFAULT_HANDLER);
+PROVIDE(HARD_FAULT = DEFAULT_HANDLER);
+PROVIDE(MEM_MANAGE = DEFAULT_HANDLER);
+PROVIDE(NMI = DEFAULT_HANDLER);
+PROVIDE(PENDSV = DEFAULT_HANDLER);
+PROVIDE(SVCALL = DEFAULT_HANDLER);
+PROVIDE(SYS_TICK = DEFAULT_HANDLER);
+PROVIDE(USAGE_FAULT = DEFAULT_HANDLER);
+
+INCLUDE interrupts.x
+
 /* Do not exceed this mark in the error messages below                | */
 ASSERT(_eexceptions - ORIGIN(FLASH) > 8, "
 You must specify the exception handlers.
 Create a non `pub` static variable with type
 `cortex_m::exception::Handlers` and place it in the
-'.rodata.exceptions' section. (cf. #[link_section]). Apply the
+'.vector_table.exceptions' section. (cf. #[link_section]). Apply the
 `#[used]` attribute to the variable to make it reach the linker.");
 
 ASSERT(_eexceptions - ORIGIN(FLASH) == 0x40, "
-Invalid '.rodata.exceptions' section.
+Invalid '.vector_table.exceptions' section.
 Make sure to place a static with type `cortex_m::exception::Handlers`
 in that section (cf. #[link_section]) ONLY ONCE.");
 
 ASSERT(_einterrupts - _eexceptions > 0, "
 You must specify the interrupt handlers.
 Create a non `pub` static variable and place it in the
-'.rodata.interrupts' section. (cf. #[link_section]). Apply the
+'.vector_table.interrupts' section. (cf. #[link_section]). Apply the
 `#[used]` attribute to the variable to help it reach the linker.");
 
 ASSERT(_einterrupts - _eexceptions <= 0x3c0, "
 There can't be more than 240 interrupt handlers.
-Fix the '.rodata.interrupts' section. (cf. #[link_section])");
+Fix the '.vector_table.interrupts' section. (cf. #[link_section])");
 
 ASSERT(_einterrupts <= _stext, "
 The '.text' section can't be placed inside '.vector_table' section.
