@@ -8,7 +8,7 @@ SECTIONS
     _svector_table = .;
     LONG(_stack_start);
 
-    KEEP(*(.vector_table.reset_handler));
+    KEEP(*(.vector_table.reset_vector));
 
     KEEP(*(.vector_table.exceptions));
     _eexceptions = .;

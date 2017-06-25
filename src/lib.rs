@@ -188,9 +188,9 @@ extern "C" {
 }
 
 #[cfg(target_arch = "arm")]
+#[link_section = ".vector_table.reset_vector"]
 #[used]
-#[link_section = ".vector_table.reset_handler"]
-static RESET_HANDLER: unsafe extern "C" fn() -> ! = reset_handler;
+static RESET_VECTOR: unsafe extern "C" fn() -> ! = reset_handler;
 
 /// The reset handler
 ///
@@ -242,15 +242,27 @@ static EXCEPTIONS: [Option<unsafe extern "C" fn()>; 14] = [
     Some(SYS_TICK),
 ];
 
+extern "C" {
+    static INTERRUPTS: u32;
+}
+
+// NOTE here we create an undefined reference to the `INTERRUPTS` symbol. This
+// symbol will be provided by the device crate and points to the part of the
+// vector table that contains the device specific interrupts. We need this
+// undefined symbol because otherwise the linker may not include the interrupts
+// part of the vector table in the final binary. This can occur when LTO is
+// *not* used and several objects are passed to the linker: since the linker is
+// lazy it will not look at object files if it has found all the undefined
+// symbols that the top crate depends on; in that scenario it may never reach
+// the device crate (unlikely scenario but not impossible). With the undefined
+// symbol we force the linker to look for the missing part of the vector table.
+#[used]
+static DEMAND: &u32 = unsafe { &INTERRUPTS };
+
 // This is the actual exception handler. `_sr` is a pointer to the previous
 // stack frame
 #[cfg(target_arch = "arm")]
 extern "C" fn default_handler(_sr: &StackedRegisters) -> ! {
-    use cortex_m::exception::Vector;
-
-    // What exception is currently being serviced
-    let _v = Vector::active();
-
     cortex_m::asm::bkpt();
 
     loop {}
@@ -272,4 +284,111 @@ pub unsafe extern "C" fn _default_handler() -> ! {
             : "volatile");
 
     ::core::intrinsics::unreachable()
+}
+
+#[macro_export]
+macro_rules! default_handler {
+    ($f:ident, local: {
+        $($lvar:ident:$lty:ident = $lval:expr;)*
+    }) => {
+        #[allow(non_snake_case)]
+        mod DEFAULT_HANDLER {
+            pub struct Locals {
+                $(
+                    pub $lvar: $lty,
+                )*
+            }
+        }
+
+        #[allow(non_snake_case)]
+        #[no_mangle]
+        pub extern "C" fn DEFAULT_HANDLER() {
+            static mut LOCALS: self::DEFAULT_HANDLER::Locals =
+                self::DEFAULT_HANDLER::Locals {
+                    $(
+                        $lvar: $lval,
+                    )*
+                };
+
+            // type checking
+            let f: fn(&mut self::DEFAULT_HANDLER::Locals) = $f;
+            f(unsafe { &mut LOCALS });
+        }
+    };
+    ($f:ident) => {
+        #[allow(non_snake_case)]
+        #[no_mangle]
+        pub extern "C" fn DEFAULT_HANDLER() {
+            // type checking
+            let f: fn() = $f;
+            f();
+        }
+    }
+}
+
+/// Fault and system exceptions
+#[allow(non_camel_case_types)]
+#[doc(hidden)]
+pub enum Exception {
+    /// Non-maskable interrupt
+    NMI,
+    /// All class of fault.
+    HARD_FAULT,
+    /// Memory management.
+    MEN_MANAGE,
+    /// Pre-fetch fault, memory access fault.
+    BUS_FAULT,
+    /// Undefined instruction or illegal state.
+    USAGE_FAULT,
+    /// System service call via SWI instruction
+    SVCALL,
+    /// Pendable request for system service
+    PENDSV,
+    /// System tick timer
+    SYS_TICK,
+}
+
+#[macro_export]
+macro_rules! exception {
+    ($NAME:ident, $f:path, local: {
+        $($lvar:ident:$lty:ident = $lval:expr;)*
+    }) => {
+        #[allow(non_snake_case)]
+        mod $NAME {
+            pub struct Locals {
+                $(
+                    pub $lvar: $lty,
+                )*
+            }
+        }
+
+        #[allow(non_snake_case)]
+        #[no_mangle]
+        pub extern "C" fn $NAME() {
+            // check that the handler exists
+            let _ = $crate::Exception::$NAME;
+
+            static mut LOCALS: self::$NAME::Locals = self::$NAME::Locals {
+                $(
+                    $lvar: $lval,
+                )*
+            };
+
+            // type checking
+            let f: fn(&mut self::$NAME::Locals) = $f;
+            f(unsafe { &mut LOCALS });
+        }
+    };
+    ($NAME:ident, $f:path) => {
+        #[allow(non_snake_case)]
+        #[no_mangle]
+        pub extern "C" fn $NAME() {
+            // check that the handler exists
+            let _ = $crate::Exception::$NAME;
+
+            // type checking
+            let f: fn() = $f;
+            f();
+        }
+    }
 }
